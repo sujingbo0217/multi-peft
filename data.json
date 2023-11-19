@@ -1,0 +1,79 @@
+{
+  "cutoff_len": 256,
+  "group_by_length": false,
+  "expand_right": true,
+  "pad_token_id": -1,
+  "save_step": 2000,
+  "early_stop_test_step": 2000,
+  "lora": [
+    {
+      "agent_id": "agent_0",
+      "output": "agent_0",
+      "optim": "adamw",
+      "lr": 3e-4,
+      "batch_size": 16,
+      "micro_batch_size": 4,
+      "test_batch_size": 64,
+      "num_epochs": 3,
+      "r": 8,
+      "alpha": 16,
+      "dropout": 0.05,
+      "target_modules": {
+        "q_proj": true,
+        "k_proj": false,
+        "v_proj": true,
+        "o_proj": false,
+        "w1_proj": false,
+        "w2_proj": false,
+        "w3_proj": false
+      },
+      "data": "math_data.json"
+    },
+    {
+      "agent_id": "agent_1",
+      "output": "agent_1",
+      "optim": "adamw",
+      "lr": 3e-4,
+      "batch_size": 16,
+      "micro_batch_size": 4,
+      "test_batch_size": 64,
+      "num_epochs": 3,
+      "r": 8,
+      "alpha": 16,
+      "dropout": 0.05,
+      "target_modules": {
+        "q_proj": true,
+        "k_proj": false,
+        "v_proj": true,
+        "o_proj": false,
+        "w1_proj": false,
+        "w2_proj": false,
+        "w3_proj": false
+      },
+      "data": "math_data.json"
+    },
+    {
+      "agent_id": "agent_2",
+      "output": "agent_2",
+      "optim": "adamw",
+      "lr": 3e-4,
+      "batch_size": 32,
+      "micro_batch_size": 4,
+      "test_batch_size": 64,
+      "num_epochs": 3,
+      "r": 4,
+      "alpha": 16,
+      "dropout": 0.02,
+      "target_modules": {
+        "q_proj": false,
+        "k_proj": false,
+        "v_proj": true,
+        "o_proj": false,
+        "w1_proj": false,
+        "w2_proj": false,
+        "w3_proj": false
+      },
+      "data": "math_data.json"
+    }
+  ]
+}
