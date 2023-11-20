@@ -143,7 +143,7 @@ def get_accumulation_steps(config: Dict[str, any]) -> Dict[str, int]:
         batch_size = lora_config["batch_size"]
         micro_batch_size = lora_config["micro_batch_size"]
         if batch_size < micro_batch_size or batch_size % micro_batch_size != 0:
-            raise f"error batch_size {batch_size} and micro batch size {micro_batch_size}"
+            raise f"Error batch_size {batch_size} and micro batch size {micro_batch_size}."
         ret_accumulation_step[lora_config["agent_id"]] = batch_size / micro_batch_size
     return ret_accumulation_step
 
@@ -156,12 +156,19 @@ def train(config: Dict[str, any], llm_model: multi_peft.BaseModelMixin, dispatch
     accumulation_step: Dict[str, int] = get_accumulation_steps(config)
     loss_fn = torch.nn.CrossEntropyLoss()
 
-    step_cnt = 0
+    step_cnt = 1
     log(f'Total {len(dispatcher.lora_agents)} task(s)')
-    while not len(dispatcher.lora_agents) > 0:
+    peak_throughput = 0
+    total_processed_tokens = 0
+    total_time_spent = 0
+
+    while len(dispatcher.lora_agents) > 0:
         step_cnt += 1
 
         inputs: multi_peft.MultiBatchInputConfig = dispatcher.get_train_data()
+        current_processed_tokens = len(inputs.prompts)
+        total_processed_tokens += current_processed_tokens
+
         for lora in inputs.batch_input_config_list:
             all_optimizer[lora.agent_id].zero_grad()
 
@@ -170,6 +177,9 @@ def train(config: Dict[str, any], llm_model: multi_peft.BaseModelMixin, dispatch
 
         total_loss = None
         idx = 0
+
+        inside_start_time = time.time()
+
         for lora_config in inputs.batch_input_config_list:
             start_idx = idx
             end_idx = idx + lora_config.batch_size
@@ -179,7 +189,7 @@ def train(config: Dict[str, any], llm_model: multi_peft.BaseModelMixin, dispatch
             loss_target = labels[start_idx:end_idx][..., 1:].contiguous().view(-1)
             loss = loss_fn(loss_input, loss_target) / accumulation_step[lora_config.agent_id]
 
-            print(f"    adapter: {lora_config.agent_id} loss: {loss}")
+            print(f"\n    adapter: {lora_config.agent_id} loss: {loss:.6f}\n")
 
             if total_loss is None:
                 total_loss = loss
@@ -188,6 +198,12 @@ def train(config: Dict[str, any], llm_model: multi_peft.BaseModelMixin, dispatch
 
         total_loss.backward()
 
+        inside_end_time = time.time()
+
+        inside_time_spent = inside_end_time - inside_start_time
+        peak_throughput = max(peak_throughput, current_processed_tokens / inside_time_spent)
+        total_time_spent += inside_time_spent
+
         for lora in inputs.batch_input_config_list:
             if step_cnt % accumulation_step[lora.agent_id] == 0:
                 all_optimizer[lora.agent_id].step()
@@ -195,6 +211,11 @@ def train(config: Dict[str, any], llm_model: multi_peft.BaseModelMixin, dispatch
         if step_cnt % config["save_step"] == 0:
             multi_peft.save_lora_model(llm_model, config, f"{step_cnt}")
 
+        dispatcher.dispatch_completed_agent()
+
+    average_throughput = total_processed_tokens / total_time_spent
+    print(f"average throughput: {average_throughput} tokens/s")
+    print(f"peak throughput: {peak_throughput} tokens/s")
     multi_peft.save_lora_model(llm_model, config)
 
 
@@ -278,17 +299,17 @@ if __name__ == "__main__":
 
     torch.cuda.empty_cache()
 
-    monitor = Monitor(1)
+    # monitor = Monitor(1)
     start_time = time.time()
 
     if args.inference:
         inference(config, model, tokenizer)
     else:
         dispatcher = multi_peft.Dispatcher(config, tokenizer)
-        max_gpu_usage = train(config, model, dispatcher)
+        train(config, model, dispatcher)
 
     end_time = time.time()
-    monitor.stop()
+    # monitor.stop()
 
     total_time = end_time - start_time
     print(f"Total Running Time: {total_time} seconds")

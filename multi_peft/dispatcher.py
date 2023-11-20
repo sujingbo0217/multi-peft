@@ -78,8 +78,6 @@ class Dispatcher:
 
             lora_batch_input_config.append(BatchInputConfig(agent_id=agent_id, batch_size=len(train_data)))
 
-        self.__dispatch_completed_agent()
-
         return MultiBatchInputConfig(
             prompts=prompts,
             tokens=batch_tokens,
@@ -89,5 +87,5 @@ class Dispatcher:
             tokens_len_without_pad=tokens_len_without_pad,
         )
 
-    def __dispatch_completed_agent(self):
+    def dispatch_completed_agent(self):
         self.lora_agents = [agent for agent in self.lora_agents if not agent.is_train_done()]

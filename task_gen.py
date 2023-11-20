@@ -12,12 +12,12 @@ def generate_lora_config(agent_id: str, model_type: str):
     config = {
         "agent_id": agent_id,
         "output": agent_id,
-        "optim": "adamw",
+        "optim": random.choice(["adamw", "sgd"]),
         "lr": round(random.uniform(1e-4, 1e-3), 4),
-        "batch_size": random.choice([32, 64, 128]),
-        "micro_batch_size": random.choice([16, 32, 64]),
+        "batch_size": random.choice([2, 4, 8]),
+        "micro_batch_size": random.choice([2, 4, 8]),
         "test_batch_size": 64,
-        "num_epochs": random.choice([10, 20, 30]),
+        "num_epochs": random.choice([1, 2, 3]),
         "r": random.choice([4, 8]),
         "alpha": 16,
         "dropout": round(random.uniform(0.01, 0.1), 2),
@@ -26,11 +26,11 @@ def generate_lora_config(agent_id: str, model_type: str):
             "k_proj": False,
             "v_proj": random.choice([True, False]),
         },
-        "data": random.choice(["math_10k.json", "math_50k.json", "commonsense_15k.json", "commonsense_170k.json"])
+        "data": random.choice(["math_10k.json", "commonsense_15k.json"])
     }
     while config.get('batch_size') < config.get('micro_batch_size'):
-        config['batch_size'] = random.choice([32, 64, 128])
-        config['micro_batch_size'] = random.choice([16, 32, 64])
+        config['batch_size'] = random.choice([2, 4, 8])
+        config['micro_batch_size'] = random.choice([2, 4, 8])
     if model_type == 'llama':
         config['target_modules']['o_proj'] = False
         config['target_modules']['w1_proj'] = False

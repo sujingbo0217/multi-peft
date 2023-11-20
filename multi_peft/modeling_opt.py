@@ -20,7 +20,12 @@ from .lora import LoraLinear
 from .model_base import BaseModelMixin
 
 
-def precompute_mask(inputs: MultiBatchInputConfig, n_head: int, device: str, dtype: torch.dtype = torch.float32) -> torch.Tensor:
+def precompute_mask(
+        inputs: MultiBatchInputConfig,
+        n_head: int,
+        device: str,
+        dtype: torch.dtype = torch.float32
+) -> torch.Tensor:
     mask = torch.full((len(inputs.prompts), n_head, inputs.batch_seq_len, inputs.batch_seq_len), float("-inf"))
     mask = torch.triu(mask, diagonal=1).to(torch.float32).cuda(device)
 
@@ -32,6 +37,7 @@ def precompute_mask(inputs: MultiBatchInputConfig, n_head: int, device: str, dty
             mask[idx] += torch.tensor([0] * zero_len + [float("-inf")] * inf_len).expand(inputs.batch_seq_len, inputs.batch_seq_len).cuda(device)
         else:
             mask[idx] += torch.tensor([float("-inf")] * inf_len + [0] * zero_len).expand(inputs.batch_seq_len, inputs.batch_seq_len).cuda(device)
+    mask.requires_grad_(False)
     return mask.to(dtype)
 
 
@@ -59,7 +65,7 @@ class Transformer:
 
     def init_lora_layer_weight(
             self,
-            adapter_name: str,
+            agent_id: str,
             r: int,
             lora_alpha: int,
             lora_dropout: float,
@@ -77,16 +83,16 @@ class Transformer:
                     lora_a_name = f"base_model.model.model.layers.{self.layer_id}.self_attn.{layer_name}.lora_A.weight"
                     lora_b_name = f"base_model.model.model.layers.{self.layer_id}.self_attn.{layer_name}.lora_B.weight"
                     if lora_a_name not in weight:
-                        raise f"can not found the layer {lora_a_name} in model"
+                        raise f"Cannot found the layer {lora_a_name} in model"
                     if lora_b_name not in weight:
-                        raise f"can not found the layer {lora_b_name} in model"
+                        raise f"Cannot found the layer {lora_b_name} in model"
                     lora_a = weight[lora_a_name]
                     lora_b = weight[lora_b_name]
 
-                linear_layer_list[idx].init_weight(adapter_name, r, lora_alpha, lora_dropout, lora_a, lora_b)
+                linear_layer_list[idx].init_weight(agent_id, r, lora_alpha, lora_dropout, lora_a, lora_b)
 
-    def _shape(self, tensor: torch.Tensor, seq_len: int, batch_size: int):
-        return tensor.view(batch_size, seq_len, self.n_heads, self.head_dim).transpose(1, 2).contiguous()
+    def __shape(self, tensor: torch.Tensor, seq_len: int, batch_size: int):
+        return tensor.view(batch_size, seq_len, self.n_heads, self.head_dim).contiguous()
 
     # @torch.compile
     def forward(
@@ -99,14 +105,11 @@ class Transformer:
         attn_norm_data = self.self_attn_layer_norm(data)
 
         xq = self.wq.forward(attn_norm_data, input_args) * self.scaling
-        xk = self._shape(self.wk.forward(attn_norm_data, input_args), -1, batch_size)
-        xv = self._shape(self.wv.forward(attn_norm_data, input_args), -1, batch_size)
+        xk = self.__shape(self.wk.forward(attn_norm_data, input_args), -1, batch_size)
+        xv = self.__shape(self.wv.forward(attn_norm_data, input_args), -1, batch_size)
+        xq = self.__shape(xq, max_seq_len, batch_size)
 
-        proj_shape = (batch_size * self.n_heads, -1, self.head_dim)
-        xq = self._shape(xq, max_seq_len, batch_size).view(*proj_shape)
-        xk = xk.view(*proj_shape)
-        xv = xv.view(*proj_shape)
-
+        # (B, M, H, K): (batch_size, max_seq_len, n_heads, hidden_size)
         attn_weights = xformers.ops.memory_efficient_attention(xq, xk, xv, mask)
         attn_weights = attn_weights.view(batch_size, max_seq_len, -1)
 
@@ -149,24 +152,19 @@ class OPTModel(BaseModelMixin):
         mask = precompute_mask(inputs, self.n_heads, self.device)
         data = F.embedding(tokens, self.embed_tokens, padding_idx=self.pad_token_id).requires_grad_(True)
 
-        def create_forward_for_checkpoint(module: Transformer):
-            def forward_for_checkpoint(*inputs_):
-                return module.forward(*inputs_)
-
-            return forward_for_checkpoint
-
         for layer in self.layers:
             # use CheckpointOffloadFunction to use offload mode
             if inputs.is_inference:
                 data = layer.forward(data, mask, inputs)
             else:
-                data = CheckpointRecomputeFunction.apply(create_forward_for_checkpoint(layer), data, mask, inputs)
+                data = CheckpointRecomputeFunction.apply(layer.forward, data, mask, inputs)
         data @= self.output.transpose(0, 1)
 
         return data
 
     def init_lora_weight(
-            self, adapter_name: str,
+            self,
+            agent_id: str,
             r: int,
             lora_alpha: int,
             lora_dropout: float,
@@ -174,7 +172,7 @@ class OPTModel(BaseModelMixin):
             weight: Optional[Dict[str, torch.Tensor]]
     ):
         for transformer_layer in self.layers:
-            transformer_layer.init_lora_layer_weight(adapter_name, r, lora_alpha, lora_dropout, target, weight)
+            transformer_layer.init_lora_layer_weight(agent_id, r, lora_alpha, lora_dropout, target, weight)
 
     @classmethod
     def from_pretrained(
@@ -242,8 +240,8 @@ class OPTModel(BaseModelMixin):
             model.layers[idx].wo = LoraLinear(layer.self_attn.out_proj.requires_grad_(False), device=device)
             model.layers[idx].w1 = LoraLinear(layer.fc1.requires_grad_(False), device=device)
             model.layers[idx].w2 = LoraLinear(layer.fc2.requires_grad_(False), device=device)
-            model.layers[idx].self_attn_layer_norm = layer.self_attn_layer_norm.weight.to(device=device).requires_grad_(False)
-            model.layers[idx].final_layer_norm = layer.final_layer_norm.weight.to(device=device).requires_grad_(False)
+            model.layers[idx].self_attn_layer_norm = layer.self_attn_layer_norm.to(device=device).requires_grad_(False)
+            model.layers[idx].final_layer_norm = layer.final_layer_norm.to(device=device).requires_grad_(False)
 
         return model
 
@@ -251,9 +249,9 @@ class OPTModel(BaseModelMixin):
         train_params = {}
         for transformer_layer in self.layers:
             for lora_config in config["lora"]:
-                adapter_name = lora_config["agent_id"]
-                if adapter_name not in train_params:
-                    train_params[adapter_name] = []
+                agent_id = lora_config["agent_id"]
+                if agent_id not in train_params:
+                    train_params[agent_id] = []
 
                 lora_layer_list = [
                     transformer_layer.wq.multi_lora_model_dict, transformer_layer.wk.multi_lora_model_dict,
@@ -262,8 +260,8 @@ class OPTModel(BaseModelMixin):
                 ]
 
                 for lora_layer in lora_layer_list:
-                    if adapter_name in lora_layer:
-                        train_params[adapter_name].append(lora_layer[adapter_name].lora_a)
-                        train_params[adapter_name].append(lora_layer[adapter_name].lora_b)
+                    if agent_id in lora_layer:
+                        train_params[agent_id].append(lora_layer[agent_id].lora_a)
+                        train_params[agent_id].append(lora_layer[agent_id].lora_b)
 
         return train_params

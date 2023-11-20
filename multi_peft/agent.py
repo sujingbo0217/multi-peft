@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from typing import Dict, List
 
 import datasets
+from tqdm import tqdm
 
 from .config import Tokens
 from .tokenizer import Tokenizer
@@ -56,10 +57,11 @@ class Agent:
         self.group_by_length = group_by_length
         self.expand_side = expand_side
         self.expand_token_id = expand_token_id
+        self.load_data()
 
     def __data_encoding(self, data: datasets.Dataset, is_train: bool = True) -> List[DataType]:
         return_data: List[DataType] = []
-        for i, text in enumerate(data):
+        for i, text in tqdm(enumerate(data), total=len(data), desc=f"Encoding text data {self.agent_id}"):
             prompt = self.__generate_prompt(text)
             if is_train:
                 tokens = self.tokenizer.encode(prompt, bos=True, eos=True)
@@ -68,8 +70,6 @@ class Agent:
             else:
                 tokens = self.tokenizer.encode(prompt, bos=True, eos=False)
             return_data.append(DataType(prompt, tokens))
-            if i % 10000 == 0:
-                print(f"Encode text data {self.agent_id}: {i}/{len(data)}")
         if is_train and self.group_by_length:
             return_data.sort(key=lambda x: len(x.tokens), reverse=True)
         else:
@@ -94,7 +94,7 @@ class Agent:
             raise 'Batch size is greater than training data length.'
         return_data = self.train_token_data[self.start_idx: self.start_idx + self.micro_batch_size]
         self.start_idx += self.micro_batch_size
-        if self.start_idx >= len(self.train_data_path):
+        if self.start_idx >= len(self.train_token_data):
             self.start_idx = 0
             self.epoch_cnt += 1
         return return_data
